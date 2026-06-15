@@ -1,9 +1,10 @@
 // ==UserScript==
-// @name         rou.video 批量 m3u 导出 v3 (翻页+标题清理)
+// @name         rou.video 批量 m3u 导出 v4 (支持搜索页+标签页)
 // @namespace    http://tampermonkey.net/
-// @version      3.0
-// @description  自动翻页收集搜索结果，iframe 提取 m3u8，生成 playlist.m3u
+// @version      4.0
+// @description  自动翻页收集搜索结果/标签页视频，iframe 提取 m3u8，生成 playlist.m3u
 // @match        *://rou.video/search*
+// @match        *://rou.video/t/*
 // @match        *://rou.video/v/*
 // @run-at       document-start
 // @grant        GM_xmlhttpRequest
@@ -12,7 +13,7 @@
 (function() {
     'use strict';
 
-    const IS_SEARCH = location.pathname.startsWith('/search');
+    const IS_SEARCH = location.pathname.startsWith('/search') || location.pathname.startsWith('/t/');
     const IS_VIDEO  = location.pathname.startsWith('/v/');
     const IS_IFRAME = window.self !== window.top;
 
@@ -68,7 +69,7 @@
     }
 
     // ============================================================
-    // Part B: 搜索页 — 面板 + 翻页 + 批量提取
+    // Part B: 搜索页 / 标签页 — 面板 + 翻页 + 批量提取
     // ============================================================
     if (!IS_SEARCH) return;
 
@@ -78,7 +79,7 @@
     <div id="m3u-batch-panel" style="position:fixed;bottom:20px;right:20px;z-index:99999;
         background:#1a1a1a;border:1px solid #444;border-radius:10px;padding:16px;
         width:360px;font-family:monospace;color:#ccc;box-shadow:0 4px 20px rgba(0,0,0,0.6);">
-        <div style="font-size:14px;color:#00ff00;margin-bottom:8px;font-weight:bold;">M3U 批量提取 v3</div>
+        <div style="font-size:14px;color:#00ff00;margin-bottom:8px;font-weight:bold;">M3U 批量提取 v4</div>
         <div id="m3u-status" style="font-size:12px;margin-bottom:6px;">
             当前页: <b id="m3u-count" style="color:#00ff00;">检测中...</b> 个视频
         </div>
