@@ -49,8 +49,8 @@
 
                         let title = (titleMatch ? titleMatch[1] : document.title || '');
                         title = title
-                            .replace(/\s*-\s*肉视[频頻],您的私人AV影院.*$/, '')
-                            .replace(/\s*-\s*肉视[频頻].*$/, '')
+                            .replace(/\s*-\s*肉[视視][频頻],您的私人AV影院.*$/, '')
+                            .replace(/\s*-\s*肉[视視][频頻].*$/, '')
                             .trim();
 
                         if (IS_IFRAME) {
