@@ -1,13 +1,13 @@
 // ==UserScript==
-// @name         rou.video 批量 m3u 导出 v4 (支持搜索页+标签页)
+// @name         rou.video 批量 m3u 导出 v5 (封面+翻页+标题清理)
 // @namespace    http://tampermonkey.net/
-// @version      4.0
-// @description  自动翻页收集搜索结果/标签页视频，iframe 提取 m3u8，生成 playlist.m3u
+// @version      5.0
+// @description  自动翻页收集视频，iframe 提取 m3u8 + 封面，生成带 tvg-logo 的 playlist.m3u
 // @match        *://rou.video/search*
 // @match        *://rou.video/t/*
 // @match        *://rou.video/v/*
 // @run-at       document-start
-// @grant        GM_xmlhttpRequest
+// @grant        none
 // ==/UserScript==
 
 (function() {
@@ -79,7 +79,7 @@
     <div id="m3u-batch-panel" style="position:fixed;bottom:20px;right:20px;z-index:99999;
         background:#1a1a1a;border:1px solid #444;border-radius:10px;padding:16px;
         width:360px;font-family:monospace;color:#ccc;box-shadow:0 4px 20px rgba(0,0,0,0.6);">
-        <div style="font-size:14px;color:#00ff00;margin-bottom:8px;font-weight:bold;">M3U 批量提取 v4</div>
+        <div style="font-size:14px;color:#00ff00;margin-bottom:8px;font-weight:bold;">M3U 批量提取 v5</div>
         <div id="m3u-status" style="font-size:12px;margin-bottom:6px;">
             当前页: <b id="m3u-count" style="color:#00ff00;">检测中...</b> 个视频
         </div>
@@ -123,25 +123,30 @@
         document.getElementById('m3u-count').textContent = seen.size;
     })();
 
-    // 从搜索页 HTML 提取 /v/xxx 链接
-    function parseSearchHTML(html) {
-        const matches = html.match(/\/v\/[a-zA-Z0-9_-]+/g) || [];
-        const seen = new Set();
-        const items = [];
-        matches.forEach(href => {
-            if (seen.has(href)) return;
-            seen.add(href);
-            items.push('https://rou.video' + href);
+    // 从 DOM 构建 { /v/xxx: coverUrl } 映射
+    function buildCoverMap(doc) {
+        const map = {};
+        doc.querySelectorAll('a[href^="/v/"]').forEach(a => {
+            const href = a.getAttribute('href');
+            if (!href || href === '/v/' || map[href]) return;
+            // 往上找卡片容器，再往下找 img
+            const card = a.closest('[data-slot="card"]') || a.parentElement;
+            if (card) {
+                const img = card.querySelector('img');
+                if (img && img.src) map[href] = img.src;
+            }
         });
-        return items;
+        return map;
     }
 
-    // 翻页收集所有搜索结果的视频链接（用 iframe 方式，不走 XHR 避免超时）
+    // 翻页收集所有搜索结果的视频链接 + 封面
     async function collectAllSearchLinks() {
         const baseUrl = new URL(location.href);
         const allURLs = new Set();
+        const coverMap = {};  // { /v/xxx: coverUrl }
 
-        // 第一页直接从当前 DOM 拿
+        // 第一页从当前 DOM 拿链接 + 封面
+        Object.assign(coverMap, buildCoverMap(document));
         document.querySelectorAll('a[href^="/v/"]').forEach(a => {
             const href = a.getAttribute('href');
             if (href && href !== '/v/') allURLs.add('https://rou.video' + href);
@@ -155,7 +160,7 @@
             pageUrl.searchParams.set('page', page);
             log(`翻页: 第 ${page} 页...`);
 
-            const links = await new Promise(resolve => {
+            const result = await new Promise(resolve => {
                 const iframe = document.createElement('iframe');
                 iframe.src = pageUrl.toString();
                 iframe.style.cssText = 'position:fixed;top:-9999px;width:1px;height:1px;border:none;';
@@ -165,36 +170,38 @@
                     done = true;
                     try {
                         const doc = iframe.contentDocument || iframe.contentWindow.document;
-                        const anchors = doc.querySelectorAll('a[href^="/v/"]');
+                        const map = buildCoverMap(doc);
                         const items = [];
-                        anchors.forEach(a => {
+                        doc.querySelectorAll('a[href^="/v/"]').forEach(a => {
                             const href = a.getAttribute('href');
                             if (href && href !== '/v/') items.push('https://rou.video' + href);
                         });
-                        resolve(items);
+                        resolve({ links: items, covers: map });
                     } catch(e) {
-                        resolve([]);
+                        resolve({ links: [], covers: {} });
                     }
                     setTimeout(() => iframe.remove(), 500);
                 };
                 iframe.onload = finish;
                 document.body.appendChild(iframe);
-                setTimeout(() => finish(), 8000); // 8秒超时
+                setTimeout(() => finish(), 8000);
             });
 
-            if (links.length === 0) {
+            if (result.links.length === 0) {
                 log(`第 ${page} 页无结果，停止翻页`);
                 break;
             }
 
-            links.forEach(l => allURLs.add(l));
-            log(`第 ${page} 页: +${links.length} 个，累计 ${allURLs.size} 个`);
+            result.links.forEach(l => allURLs.add(l));
+            Object.assign(coverMap, result.covers);
+            log(`第 ${page} 页: +${result.links.length} 个，累计 ${allURLs.size} 个`);
             page++;
         }
 
         return [...allURLs].map(url => ({
             href: url,
-            title: url.split('/').pop() || ''
+            title: url.split('/').pop() || '',
+            cover: coverMap[url.replace('https://rou.video', '')] || ''
         }));
     }
 
@@ -278,10 +285,22 @@
             return;
         }
 
-        // Step 3: 生成 m3u
+        // Step 3: 生成 m3u（带封面）
         let m3u = '#EXTM3U\n';
         dataList.forEach(d => {
-            m3u += `#EXTINF:0,${d.title}\n${d.url}\n`;
+            // 从 m3u8 URL 提取视频 ID 用于匹配封面
+            const vidMatch = d.url.match(/\/hls\/([a-zA-Z0-9_-]+)\//);
+            const vid = vidMatch ? vidMatch[1] : '';
+            // 在当前收集的 links 中找封面
+            let cover = '';
+            for (const l of links) {
+                if (l.href.endsWith('/' + vid)) { cover = l.cover; break; }
+            }
+            if (cover) {
+                m3u += `#EXTINF:0 tvg-logo="${cover}",${d.title}\n${d.url}\n`;
+            } else {
+                m3u += `#EXTINF:0,${d.title}\n${d.url}\n`;
+            }
         });
 
         textEl.value = m3u;
