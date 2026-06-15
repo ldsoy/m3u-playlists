@@ -136,27 +136,52 @@
         return items;
     }
 
-    // 翻页收集所有搜索结果的视频链接
+    // 翻页收集所有搜索结果的视频链接（用 iframe 方式，不走 XHR 避免超时）
     async function collectAllSearchLinks() {
-        const url = new URL(location.href);
+        const baseUrl = new URL(location.href);
         const allURLs = new Set();
-        let page = 1;
 
-        while (true) {
-            url.searchParams.set('page', page);
+        // 第一页直接从当前 DOM 拿
+        document.querySelectorAll('a[href^="/v/"]').forEach(a => {
+            const href = a.getAttribute('href');
+            if (href && href !== '/v/') allURLs.add('https://rou.video' + href);
+        });
+        log(`第1页: ${allURLs.size} 个`);
+
+        // 后续页通过隐藏 iframe 加载
+        let page = 2;
+        while (page <= 20) {
+            const pageUrl = new URL(baseUrl);
+            pageUrl.searchParams.set('page', page);
             log(`翻页: 第 ${page} 页...`);
 
-            const resp = await new Promise((resolve, reject) => {
-                GM_xmlhttpRequest({
-                    method: 'GET',
-                    url: url.toString(),
-                    onload: r => resolve(r.responseText),
-                    onerror: reject,
-                    timeout: 10000
-                });
+            const links = await new Promise(resolve => {
+                const iframe = document.createElement('iframe');
+                iframe.src = pageUrl.toString();
+                iframe.style.cssText = 'position:fixed;top:-9999px;width:1px;height:1px;border:none;';
+                let done = false;
+                const finish = () => {
+                    if (done) return;
+                    done = true;
+                    try {
+                        const doc = iframe.contentDocument || iframe.contentWindow.document;
+                        const anchors = doc.querySelectorAll('a[href^="/v/"]');
+                        const items = [];
+                        anchors.forEach(a => {
+                            const href = a.getAttribute('href');
+                            if (href && href !== '/v/') items.push('https://rou.video' + href);
+                        });
+                        resolve(items);
+                    } catch(e) {
+                        resolve([]);
+                    }
+                    setTimeout(() => iframe.remove(), 500);
+                };
+                iframe.onload = finish;
+                document.body.appendChild(iframe);
+                setTimeout(() => finish(), 8000); // 8秒超时
             });
 
-            const links = parseSearchHTML(resp);
             if (links.length === 0) {
                 log(`第 ${page} 页无结果，停止翻页`);
                 break;
@@ -165,7 +190,6 @@
             links.forEach(l => allURLs.add(l));
             log(`第 ${page} 页: +${links.length} 个，累计 ${allURLs.size} 个`);
             page++;
-            if (page > 20) break;
         }
 
         return [...allURLs].map(url => ({
